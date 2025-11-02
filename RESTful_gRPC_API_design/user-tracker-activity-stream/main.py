@@ -1,9 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import random
 from fastapi.responses import JSONResponse
+from auth_helpers import encode_token, validate_token, validate_admin_role
+from fastapi import Depends
 
 version = '/v1'
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 class UserCreate(BaseModel):
     name : str
@@ -38,6 +44,25 @@ def generate_id(type: str) -> str:
     return id
 
 app = FastAPI()
+
+# Login endpoint, should be public.
+@app.post(f"{version}/login")
+def login(request: LoginRequest):
+    # Mock validation; usually check against a database and get user information from database
+    if request.username == "admin" and request.password == "password":
+        jwt_token = encode_token({"name": "Admin Account", "email": "random@example.com", "role": "Admin"})
+        return JSONResponse(
+            status_code = 201,
+            content = {"token": jwt_token}
+        )
+    elif request.username == "user" and request.password == "password":
+        jwt_token = encode_token({"name": "User Account", "email": "random@example.com", "role": "User"})
+        return JSONResponse(
+            status_code = 201,
+            content = {"token": jwt_token}
+        )
+    else:
+        raise HTTPException(status_code = 401, detail = "Invalid credentials")
 
 # Get all users
 @app.get(f"{version}/users")
@@ -136,4 +161,16 @@ def get_user_posts(id: str):
         return JSONResponse(
             status_code = 200,
             content = [post.model_dump() for post in posts_by_user[id]]
+        )
+
+# Deletes a user, requires admin role.
+@app.delete(f"{version}/users/{{id}}")
+def delete_user(id: str, _: dict = Depends(validate_admin_role)):
+    if id not in users:
+        raise HTTPException(status_code=404, detail="User not found")
+    else:
+        del users[id]
+        return JSONResponse(
+            status_code = 200,
+            content = {"message": "User deleted successfully"}
         )
