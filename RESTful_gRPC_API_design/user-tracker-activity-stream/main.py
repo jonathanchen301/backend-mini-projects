@@ -1,9 +1,18 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 import random
 from fastapi.responses import JSONResponse
 from auth_helpers import encode_token, validate_token, validate_admin_role
 from fastapi import Depends
+import logging
+import uuid
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("app")
 
 version = '/v1'
 
@@ -44,6 +53,51 @@ def generate_id(type: str) -> str:
     return id
 
 app = FastAPI()
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
+    return JSONResponse(
+        status_code = exc.status_code,
+        content = {"error": exc.__class__.__name__, "message": exc.detail}
+    )
+
+@app.exception_handler(RequestValidationError)
+async def json_validation_error_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+    return JSONResponse(
+        status_code = 400,
+        content = {"error": exc.__class__.__name__, "message": exc.detail}
+    )
+
+@app.exception_handler(Exception)
+async def exception_handler(_: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(
+        status_code = 500,
+        content = {"error": exc.__class__.__name__, "message": "Internal server error"}
+    )
+
+@app.middleware("http")
+async def log_errors_middleware(request: Request, call_next):
+    trace_id = str(uuid.uuid4())
+    request.state.trace_id = trace_id
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        logger.exception(
+            "Unhandled exception",
+            extra={"trace_id": trace_id, "method": request.method, "path": request.url.path},
+        )
+        raise
+    if response.status_code >= 500:
+        logger.error(
+            "5xx response",
+            extra={
+                "trace_id": trace_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+            },
+        )
+    return response
 
 # Login endpoint, should be public.
 @app.post(f"{version}/login")
@@ -88,22 +142,13 @@ def get_users(limit: int = 10, offset: int = 0, role: str | None = None, sort: s
         elif order == "desc":
             filtered_users.sort(key=lambda x: getattr(x, sort), reverse=True)
         else:
-            return JSONResponse(
-                status_code = 400,
-                content = {"error": "Order must be 'asc' or 'desc'"}
-            )
+            raise HTTPException(status_code=400, detail="Order must be 'asc' or 'desc'")
 
     # Pagination
     if limit < 1 or limit > 100:
-        return JSONResponse(
-            status_code = 400,
-            content = {"error": "Limit must be between 1 and 100"}
-        )
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
     elif offset < 0:
-        return JSONResponse(
-            status_code = 400,
-            content = {"error": "Offset must be >= 0"}
-        )
+        raise HTTPException(status_code=400, detail="Offset must be >= 0")
 
     return JSONResponse(
         status_code = 200,
@@ -116,20 +161,18 @@ def add_user(user: UserCreate):
 
     # Validation Checks
     if user.name == "":
-        return JSONResponse(
-            status_code = 400,
-            content = {"error": "Name is required"}
-        )
+        raise HTTPException(status_code=400, detail="Name is required")
     if user.email == "":
-        return JSONResponse(
-            status_code = 400,
-            content = {"error": "Email is required"}
-        )
+        raise HTTPException(status_code=400, detail="Email is required")
+    if user.email in [user.email for user in users.values()]:
+        raise HTTPException(status_code=409, detail="Email already exists")
 
     id = generate_id("user")
     new_user = User(id=id, **user.model_dump())
     users[id] = new_user
     posts_by_user[id] = []
+
+
     return JSONResponse(
         status_code = 201,
         content = new_user.model_dump()
@@ -139,10 +182,7 @@ def add_user(user: UserCreate):
 @app.get(f"{version}/users/{{id}}")
 def get_user(id: str):
     if id not in users:
-        return JSONResponse(
-            status_code = 404,
-            content = {"error": "User not found"}
-        )
+        raise HTTPException(status_code=404, detail="User not found")
     else:
         return JSONResponse(
             status_code = 200,
@@ -153,10 +193,7 @@ def get_user(id: str):
 @app.get(f"{version}/users/{{id}}/posts")
 def get_user_posts(id: str):
     if id not in users:
-        return JSONResponse(
-            status_code = 404,
-            content = {"error": "User not found"}
-        )
+        raise HTTPException(status_code=404, detail="User not found")
     else:
         return JSONResponse(
             status_code = 200,
