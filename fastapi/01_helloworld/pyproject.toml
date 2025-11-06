@@ -1,0 +1,9 @@
+[project]
+name = "Hello World"
+version = "0.1.0"
+description = "Hello World API"
+authors = [{ name = "Jonathan Chen" }]
+dependencies = [
+    "fastapi",
+    "uvicorn",
+]
