@@ -1,0 +1,11 @@
+<h1> {{ story.title }} </h1>
+
+<h2> {{ story.author }} </h2>
+
+<p> {{ story.genre }} </p>
+
+<div> {{ story.content }} </div>
+
+{% if story.has_cover %}
+<img src="/static/covers/{{ story.story_id }}.jpg">
+{% endif %}
